@@ -62,11 +62,12 @@ fun DeltaChart(
             val dataMin = visible.minOfOrNull { it.v } ?: 0f
 
             // NaN thresholds (unparseable fields) must not poison the Y scale
-            val refMax = maxOfNotNull(
-                if (thresholdOn.isNaN()) null else thresholdOn,
-                if (thresholdOff.isNaN()) null else thresholdOff,
-                dataMax,
-            )
+            val refCandidates = buildList {
+                if (!thresholdOn.isNaN()) add(thresholdOn)
+                if (!thresholdOff.isNaN()) add(thresholdOff)
+                add(dataMax)
+            }
+            val refMax = refCandidates.maxOrNull() ?: 0f
             val top = max(refMax * 1.15f, 1f)
             val bottom = min(0f, dataMin)
             val ySpan = (top - bottom).coerceAtLeast(0.001f)
