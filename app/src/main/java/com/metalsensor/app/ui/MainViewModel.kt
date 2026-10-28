@@ -26,6 +26,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import no.nordicsemi.android.ble.observer.ConnectionObserver
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
 // ---------------------------------------------------------------------------
@@ -115,6 +118,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _recordingFile = MutableStateFlow<String?>(null)
     val recordingFile: StateFlow<String?> = _recordingFile.asStateFlow()
 
+    // ----- manual command console -----
+    private val _consoleLog = MutableStateFlow<List<String>>(emptyList())
+    val consoleLog: StateFlow<List<String>> = _consoleLog.asStateFlow()
+
     // ----- internals -----
     private var currentMac: String? = null
     private var userDisconnect = false
@@ -190,6 +197,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // -----------------------------------------------------------------------
 
     private fun handleLine(line: String) {
+        // Keep the console log readable: skip the high-rate streaming lines.
+        if (!line.startsWith("D=") && !line.startsWith("B=") && !line.startsWith("R=")) {
+            appendConsole(line)
+        }
         when (val msg = Protocol.parse(line)) {
             is InboundMessage.Delta -> {
                 _delta.value = msg.value
@@ -226,8 +237,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             is InboundMessage.Err -> showToast("خطای دستگاه: ${msg.message}")
 
+            // Info lines (I=CHIP:..., I=SCAN:...) are already captured in the console log.
+            is InboundMessage.Info -> Unit
+
             InboundMessage.Unknown -> Unit
         }
+    }
+
+    private fun appendConsole(entry: String) {
+        val stamp = consoleTimeFormat.format(Date())
+        val current = _consoleLog.value
+        val next = ArrayList<String>(current.size + 1)
+        if (current.size >= CONSOLE_MAX_LINES) {
+            next.addAll(current.subList(current.size - CONSOLE_MAX_LINES + 1, current.size))
+        }
+        next.add("$stamp  $entry")
+        _consoleLog.value = next
+    }
+
+    /** Sends a raw protocol command from the manual console (e.g. SCAN, ADDR=0x2C). */
+    fun sendRawCommand(raw: String) {
+        val cmd = raw.trim()
+        if (cmd.isEmpty()) return
+        if (!requireConnected()) return
+        appendConsole("> $cmd")
+        manager.send(cmd)
+        val key = cmd.substringBefore('=').trim().uppercase()
+        if (key in Protocol.ACK_KEYS) registerAck(key)
+    }
+
+    fun clearConsole() {
+        _consoleLog.value = emptyList()
     }
 
     private fun appendChart(value: Int) {
@@ -618,5 +658,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private const val SCAN_DURATION_MS = 15_000L
         private const val CHART_WINDOW_MS = 60_000L
         private const val CHART_MAX_POINTS = 300
+        private const val CONSOLE_MAX_LINES = 200
+
+        private val consoleTimeFormat = SimpleDateFormat("HH:mm:ss", Locale.US)
     }
 }

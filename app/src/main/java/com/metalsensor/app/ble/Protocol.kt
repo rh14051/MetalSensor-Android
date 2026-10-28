@@ -43,6 +43,9 @@ sealed class InboundMessage {
     /** ERR=... — device reported an error. */
     data class Err(val message: String) : InboundMessage()
 
+    /** I=CHIP:QMC5883P/QMC6310@0x2C — informational line (chip identity, I2C scan results). */
+    data class Info(val text: String) : InboundMessage()
+
     /** Unrecognized line (ignored by the app). */
     data object Unknown : InboundMessage()
 }
@@ -88,6 +91,7 @@ object Protocol {
             "A" -> parseParams(value) ?: InboundMessage.Unknown
             "OK" -> InboundMessage.Ok(value.uppercase())
             "ERR" -> InboundMessage.Err(value.ifEmpty { "unknown" })
+            "I" -> InboundMessage.Info(value.ifEmpty { "" })
             else -> InboundMessage.Unknown
         }
     }

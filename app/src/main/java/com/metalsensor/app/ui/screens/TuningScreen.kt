@@ -9,11 +9,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -28,14 +32,21 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.metalsensor.app.ui.ConnState
 import com.metalsensor.app.ui.MainViewModel
 import com.metalsensor.app.ui.ParamKey
@@ -163,6 +174,17 @@ fun TuningScreen(vm: MainViewModel, onBack: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
+            Spacer(Modifier.height(4.dp))
+
+            // ---------- Manual command console (SCAN / ADDR= / any raw command) ----------
+            val consoleLog by vm.consoleLog.collectAsState()
+            CommandConsole(
+                log = consoleLog,
+                enabled = connected,
+                onSend = { vm.sendRawCommand(it) },
+                onClear = { vm.clearConsole() },
+            )
+
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -209,6 +231,128 @@ private fun ParamRow(
             )
             Spacer(Modifier.width(8.dp))
             Button(onClick = onApply, enabled = applyEnabled) { Text("اعمال") }
+        }
+    }
+}
+
+/** Quick one-tap raw commands shown as chips above the console input. */
+private val QUICK_COMMANDS = listOf("SCAN", "SHOW", "HIDE", "RAW", "NRAW")
+
+/**
+ * Manual protocol console: send any raw command (SCAN, ADDR=0x2C, ...) and see
+ * the device replies (OK= / ERR= / I=CHIP / I=SCAN) in a small log. The log is
+ * rendered LTR + monospace because the protocol itself is plain ASCII.
+ */
+@Composable
+private fun CommandConsole(
+    log: List<String>,
+    enabled: Boolean,
+    onSend: (String) -> Unit,
+    onClear: () -> Unit,
+) {
+    var input by remember { mutableStateOf("") }
+    val listState = rememberLazyListState()
+
+    // Auto-scroll to the newest entry
+    LaunchedEffect(log.size) {
+        if (log.isNotEmpty()) listState.animateScrollToItem(log.lastIndex)
+    }
+
+    fun submit() {
+        if (input.isNotBlank()) {
+            onSend(input)
+            input = ""
+        }
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "کنسول فرمان",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "SCAN | ADDR=0x2C",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+
+            // quick commands
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                QUICK_COMMANDS.forEach { cmd ->
+                    OutlinedButton(
+                        onClick = { onSend(cmd) },
+                        enabled = enabled,
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            horizontal = 12.dp, vertical = 4.dp
+                        ),
+                    ) {
+                        Text(cmd, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+
+            // command input (LTR: the protocol is ASCII)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    enabled = enabled,
+                    label = { Text("فرمان دستی، مثلاً ADDR=0x2C") },
+                    textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Send
+                    ),
+                    keyboardActions = KeyboardActions(onSend = { submit() }),
+                )
+                Spacer(Modifier.width(8.dp))
+                IconButton(onClick = { submit() }, enabled = enabled && input.isNotBlank()) {
+                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "ارسال")
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+
+            // log
+            if (log.isEmpty()) {
+                Text(
+                    "پاسخ‌های دستگاه اینجا نمایش داده می‌شود…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp),
+                ) {
+                    items(log.size) { i ->
+                        Text(
+                            log[i],
+                            style = LocalTextStyle.current.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                            ),
+                            textAlign = TextAlign.Start,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                OutlinedButton(
+                    onClick = onClear,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("پاک کردن گزارش") }
+            }
         }
     }
 }
