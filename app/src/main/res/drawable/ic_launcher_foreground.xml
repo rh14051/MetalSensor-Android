@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Magnetometer / radar glyph -->
+    <path
+        android:pathData="M42,58 A12,12 0 0 1 66,58"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M33,58 A21,21 0 0 1 75,58"
+        android:strokeColor="#FFFFFF"
+        android:strokeAlpha="0.75"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M24,58 A30,30 0 0 1 84,58"
+        android:strokeColor="#FFFFFF"
+        android:strokeAlpha="0.5"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M54,58 m-5,0 a5,5 0 1 0 10,0 a5,5 0 1 0 -10,0"
+        android:fillColor="#FFFFFF" />
+</vector>
