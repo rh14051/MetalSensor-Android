@@ -18,7 +18,10 @@ import com.metalsensor.app.ble.Protocol
 import com.metalsensor.app.ble.SensorState
 import com.metalsensor.app.data.CsvLogger
 import com.metalsensor.app.data.PrefsRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,9 +29,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import no.nordicsemi.android.ble.observer.ConnectionObserver
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.ConcurrentHashMap
 
 // ---------------------------------------------------------------------------
@@ -51,6 +53,14 @@ data class ParamFields(
     val onTimeMs: String = "2500",
     val offTimeMs: String = "4000",
     val alpha: String = "0.004",
+)
+
+/** One CSV row, queued from the BLE callback and written on Dispatchers.IO. */
+private data class CsvRow(
+    val delta: Int,
+    val state: String,
+    val b: Triple3,
+    val r: Triple3,
 )
 
 // ---------------------------------------------------------------------------
@@ -122,6 +132,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _consoleLog = MutableStateFlow<List<String>>(emptyList())
     val consoleLog: StateFlow<List<String>> = _consoleLog.asStateFlow()
 
+    // CSV rows are queued here (never blocking the BLE callback) and flushed to
+    // disk by a single writer coroutine on Dispatchers.IO.
+    private val csvQueue = Channel<CsvRow>(
+        capacity = 1024,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
     // ----- internals -----
     private var currentMac: String? = null
     private var userDisconnect = false
@@ -132,9 +149,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val pendingAcks = ConcurrentHashMap<String, Job>()
 
+    // console flood control
+    private var lastConsoleLine: String? = null
+    private var lastConsoleAtMs = 0L
+    private var consoleSuppressed = 0
+
     init {
         manager.listener = object : EspBleManager.Listener {
             override fun onLineReceived(line: String) = handleLine(line)
+        }
+
+        // Single CSV writer on IO — file I/O never runs on the main/BLE threads.
+        viewModelScope.launch(Dispatchers.IO) {
+            for (row in csvQueue) {
+                csv.log(
+                    delta = row.delta,
+                    state = row.state,
+                    bx = row.b.x, by = row.b.y, bz = row.b.z,
+                    raw = intArrayOf(row.r.x, row.r.y, row.r.z),
+                )
+            }
         }
 
         manager.setConnectionObserver(object : ConnectionObserver {
@@ -206,13 +240,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _delta.value = msg.value
                 appendChart(msg.value)
                 if (_recording.value) {
-                    val b = _baseline.value
-                    val r = _raw.value
-                    csv.log(
-                        delta = msg.value,
-                        state = _sensorState.value.name,
-                        bx = b.x, by = b.y, bz = b.z,
-                        raw = intArrayOf(r.x, r.y, r.z),
+                    csvQueue.trySend(
+                        CsvRow(msg.value, _sensorState.value.name, _baseline.value, _raw.value)
                     )
                 }
             }
@@ -244,15 +273,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun appendConsole(entry: String) {
-        val stamp = consoleTimeFormat.format(Date())
+    private fun appendConsole(entry: String, force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        // A misbehaving device can spam ERR/INFO lines at stream rate (e.g. when
+        // I2C fails). Collapse duplicates and rate-limit appends so neither the
+        // memory nor the recomposition can flood; user echoes are never dropped.
+        if (!force) {
+            if (entry == lastConsoleLine && now - lastConsoleAtMs < DUP_WINDOW_MS) {
+                consoleSuppressed++
+                return
+            }
+            if (now - lastConsoleAtMs < MIN_CONSOLE_INTERVAL_MS) {
+                consoleSuppressed++
+                return
+            }
+        }
+        val stamp = LocalTime.now().format(consoleTimeFormat)
         val current = _consoleLog.value
-        val next = ArrayList<String>(current.size + 1)
+        val next = ArrayList<String>(current.size + 2)
         if (current.size >= CONSOLE_MAX_LINES) {
             next.addAll(current.subList(current.size - CONSOLE_MAX_LINES + 1, current.size))
         }
+        if (consoleSuppressed > 0) {
+            next.add("$stamp  … ${consoleSuppressed} پیام تکراری حذف شد")
+            consoleSuppressed = 0
+        }
         next.add("$stamp  $entry")
         _consoleLog.value = next
+        lastConsoleLine = entry
+        lastConsoleAtMs = now
     }
 
     /** Sends a raw protocol command from the manual console (e.g. SCAN, ADDR=0x2C). */
@@ -260,7 +309,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val cmd = raw.trim()
         if (cmd.isEmpty()) return
         if (!requireConnected()) return
-        appendConsole("> $cmd")
+        appendConsole("> $cmd", force = true)
         manager.send(cmd)
         val key = cmd.substringBefore('=').trim().uppercase()
         if (key in Protocol.ACK_KEYS) registerAck(key)
@@ -271,6 +320,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun appendChart(value: Int) {
+        // Firmware artifacts (e.g. an INT32_MIN sentinel produced by a failed
+        // float->int conversion on a failing sensor) would flatten the Y scale
+        // for minutes. Real delta from an int16 magnetometer can never exceed
+        // ±65534, so anything beyond ±1e6 is not plotted — the numeric readout
+        // above still shows the raw value the device sent.
+        if (kotlin.math.abs(value) > 1_000_000) return
         val now = System.currentTimeMillis()
         val current = _chartPoints.value
         val next = ArrayList<ChartPoint>(current.size + 1)
@@ -659,7 +714,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private const val CHART_WINDOW_MS = 60_000L
         private const val CHART_MAX_POINTS = 300
         private const val CONSOLE_MAX_LINES = 200
+        private const val DUP_WINDOW_MS = 1_500L
+        private const val MIN_CONSOLE_INTERVAL_MS = 100L
 
-        private val consoleTimeFormat = SimpleDateFormat("HH:mm:ss", Locale.US)
+        // java.time formatters are immutable and thread-safe.
+        private val consoleTimeFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
     }
 }

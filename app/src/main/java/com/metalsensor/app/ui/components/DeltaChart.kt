@@ -57,20 +57,22 @@ fun DeltaChart(
             val windowEnd = points.lastOrNull()?.t ?: 0L
             val windowStart = windowEnd - windowMs
 
-            val visible = points.filter { it.t >= windowStart }
+            // Only finite, in-window samples are plotted; a single NaN/Infinity
+            // sample must never poison the Y scale (defensive hardening).
+            val visible = points.filter { it.t >= windowStart && it.v.isFinite() }
             val dataMax = visible.maxOfOrNull { it.v } ?: 0f
             val dataMin = visible.minOfOrNull { it.v } ?: 0f
 
-            // NaN thresholds (unparseable fields) must not poison the Y scale
+            // NaN/Infinity thresholds (unparseable fields) must not poison the Y scale
             val refCandidates = buildList {
-                if (!thresholdOn.isNaN()) add(thresholdOn)
-                if (!thresholdOff.isNaN()) add(thresholdOff)
-                add(dataMax)
+                if (thresholdOn.isFinite()) add(thresholdOn)
+                if (thresholdOff.isFinite()) add(thresholdOff)
+                if (dataMax.isFinite()) add(dataMax)
             }
             val refMax = refCandidates.maxOrNull() ?: 0f
-            val top = max(refMax * 1.15f, 1f)
-            val bottom = min(0f, dataMin)
-            val ySpan = (top - bottom).coerceAtLeast(0.001f)
+            val top = if (refMax.isFinite()) max(refMax * 1.15f, 1f) else 1f
+            val bottom = if (dataMin.isFinite()) min(0f, dataMin) else 0f
+            val ySpan = ((top - bottom).takeIf { it.isFinite() && it > 0.001f }) ?: 1f
 
             fun xOf(t: Long): Float = (t - windowStart).toFloat() / windowMs.toFloat() * w
             fun yOf(v: Float): Float = h - ((v - bottom) / ySpan) * h

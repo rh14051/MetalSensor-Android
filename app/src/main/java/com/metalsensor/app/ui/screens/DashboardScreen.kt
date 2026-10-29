@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -49,6 +50,8 @@ import com.metalsensor.app.ui.MainViewModel
 import com.metalsensor.app.ui.components.ConnectionStatusBar
 import com.metalsensor.app.ui.components.DeltaChart
 import com.metalsensor.app.ui.components.StateBadge
+import com.metalsensor.app.ui.theme.WarnOrange
+import kotlin.math.abs
 
 /**
  * Main dashboard: live delta, state badge, baseline, 60s chart with the two
@@ -75,6 +78,9 @@ fun DashboardScreen(vm: MainViewModel, onOpenTuning: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
+            // Keep all content away from the status bar / punch-hole camera on
+            // top and the home & back gesture area on the bottom.
+            .safeDrawingPadding()
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -118,13 +124,33 @@ fun DashboardScreen(vm: MainViewModel, onOpenTuning: () -> Unit) {
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                // The font shrinks for long numbers (e.g. INT32 artifacts sent by a
+                // misbehaving sensor) so the value never overflows the card width.
+                val deltaText = delta.toString()
+                val deltaFontSize = when (deltaText.length) {
+                    in 0..6 -> 56
+                    in 7..8 -> 40
+                    else -> 28
+                }
                 Text(
-                    "$delta",
-                    fontSize = 56.sp,
+                    deltaText,
+                    fontSize = deltaFontSize.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
                 )
+                if (abs(delta) > 70000) {
+                    // Real delta from an int16 magnetometer can never exceed ±65534;
+                    // anything bigger is a firmware/sensor artifact (e.g. a failed
+                    // float->int conversion). Show a hint instead of a raw huge number.
+                    Text(
+                        "مقدار دلتا غیرعادی است — احتمال خطای سنسور یا I2C",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = WarnOrange,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                }
                 StateBadge(sensorState)
                 Spacer(Modifier.height(6.dp))
                 Text(

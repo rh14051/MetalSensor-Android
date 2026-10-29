@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -81,6 +82,7 @@ fun TuningScreen(vm: MainViewModel, onBack: () -> Unit) {
     val connected = connState == ConnState.CONNECTED
 
     Scaffold(
+        modifier = Modifier.imePadding(),
         topBar = {
             TopAppBar(
                 title = { Text("تنظیم پارامترها") },
@@ -253,9 +255,13 @@ private fun CommandConsole(
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
-    // Auto-scroll to the newest entry
+    // Auto-scroll to the newest entry. Uses the instant scrollToItem (not the
+    // animated variant): with the 200-entry cap trimming old lines, the animated
+    // scroll could race with the list mutation and crash on a stale index.
     LaunchedEffect(log.size) {
-        if (log.isNotEmpty()) listState.animateScrollToItem(log.lastIndex)
+        if (log.isNotEmpty()) {
+            runCatching { listState.scrollToItem(log.lastIndex) }
+        }
     }
 
     fun submit() {
