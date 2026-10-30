@@ -16,8 +16,21 @@ enum class SensorState {
 
 /** A single parsed message received from the ESP32 TX characteristic (FFE2). */
 sealed class InboundMessage {
-    /** D=1234 — current delta value. */
-    data class Delta(val value: Int) : InboundMessage()
+    /**
+     * D=1234 — current delta value.
+     * Extended stream format: D=1234,M=1,S=CLEAR (comma-separated key=value
+     * fields; M = motion active, S = state machine state). Both the legacy
+     * plain format and the extended one parse to this message; the extra
+     * fields are null when absent (e.g. older firmware).
+     */
+    data class Delta(
+        val value: Int,
+        val motion: Boolean? = null,
+        val state: SensorState? = null,
+    ) : InboundMessage()
+
+    /** M=1 / M=0 — standalone motion edge event (sent on every state change). */
+    data class Motion(val active: Boolean) : InboundMessage()
 
     /** S=CLEAR — sensor state machine state. */
     data class State(val state: SensorState) : InboundMessage()
@@ -80,8 +93,12 @@ object Protocol {
         val key = line.substring(0, idx).trim().uppercase()
         val value = line.substring(idx + 1).trim()
         return when (key) {
-            "D" -> value.toIntOrNull()
-                ?.let { InboundMessage.Delta(it) } ?: InboundMessage.Unknown
+            "D" -> parseDelta(value)
+            "M" -> when (value) {
+                "1" -> InboundMessage.Motion(true)
+                "0" -> InboundMessage.Motion(false)
+                else -> InboundMessage.Unknown
+            }
             "S" -> SensorState.from(value)
                 ?.let { InboundMessage.State(it) } ?: InboundMessage.Unknown
             "B" -> parseTriple(value)
@@ -94,6 +111,35 @@ object Protocol {
             "I" -> InboundMessage.Info(value.ifEmpty { "" })
             else -> InboundMessage.Unknown
         }
+    }
+
+    /**
+     * D=<delta>[,M=<0|1>][,S=<STATE>] — parses the periodic stream packet.
+     * The first field must be an integer delta; any additional key=value
+     * fields are extracted and unknown/garbled ones are silently skipped so
+     * future extensions can never break delta parsing.
+     */
+    private fun parseDelta(value: String): InboundMessage {
+        val fields = value.split(',')
+        val delta = fields.firstOrNull()?.trim()?.toIntOrNull()
+            ?: return InboundMessage.Unknown
+        var motion: Boolean? = null
+        var state: SensorState? = null
+        for (raw in fields.drop(1)) {
+            val idx = raw.indexOf('=')
+            if (idx <= 0) continue
+            val k = raw.substring(0, idx).trim().uppercase()
+            val v = raw.substring(idx + 1).trim()
+            when (k) {
+                "M" -> motion = when (v) {
+                    "1" -> true
+                    "0" -> false
+                    else -> null
+                }
+                "S" -> state = SensorState.from(v)
+            }
+        }
+        return InboundMessage.Delta(delta, motion, state)
     }
 
     private fun parseTriple(value: String): IntArray? {

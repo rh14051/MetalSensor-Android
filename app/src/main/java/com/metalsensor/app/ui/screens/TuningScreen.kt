@@ -178,6 +178,34 @@ fun TuningScreen(vm: MainViewModel, onBack: () -> Unit) {
 
             Spacer(Modifier.height(4.dp))
 
+            // ---------- Motion band on chart ----------
+            val showMotionOnChart by vm.showMotionOnChart.collectAsState()
+            Card(Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "نمایش سیگنال حرکت در نمودار",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            "نوار نارنجی روی بازه‌های فعال بودن تشخیص حرکت رسم می‌شود",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = showMotionOnChart,
+                        onCheckedChange = { vm.setShowMotionOnChart(it) },
+                    )
+                }
+            }
+
             // ---------- Manual command console (SCAN / ADDR= / any raw command) ----------
             val consoleLog by vm.consoleLog.collectAsState()
             CommandConsole(

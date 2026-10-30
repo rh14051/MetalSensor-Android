@@ -1,6 +1,6 @@
 /*
  * ============================================================================
- *  Metal Sensor (سنسور فلز) — ESP32-C3 Vehicle Detector Firmware  (v1.1)
+ *  Metal Sensor (سنسور فلز) — ESP32-C3 Vehicle Detector Firmware  (v1.2)
  * ============================================================================
  *  Companion firmware for the "سنسور فلز" Android tuning app.
  *
@@ -13,6 +13,9 @@
  *            A board labelled "GY-271 QMC5883L" may actually carry a newer
  *            QST chip at 0x2C — auto-detect handles all of them.
  *  LED     : GPIO4 — HIGH while DETECTING / OCCUPIED (set LED_PIN to change)
+ *  MOTION  : GPIO5 — digital input read every cycle; see MOTION_* macros in
+ *            the Configuration section. Reports its level to the app as
+ *            M=1 / M=0 (edge event + field inside every D= packet).
  *  BLE     : standard ESP32 Bluedroid stack — NO external Arduino libraries
  *            are required (only the ESP32 board package itself).
  *
@@ -41,8 +44,17 @@
  *    (anything else)                       -> ERR=UNKNOWN_CMD
  *
  *  TX (notifications to the app):
- *    D=<delta>            current delta (every 200 ms while streaming)
- *    S=CAL|CLEAR|DETECTING|OCCUPIED   state (sent on every change)
+ *    D=<delta>,M=<0|1>,S=<state>   periodic packet every 200 ms while
+ *                                  streaming. M = motion input level,
+ *                                  S = state machine state — both repeated
+ *                                  in every packet so the app re-syncs even
+ *                                  if an edge message was lost. (Older app
+ *                                  versions that only understand plain
+ *                                  "D=<n>" ignore the extra fields safely.)
+ *    M=<0|1>              standalone motion edge event, sent immediately on
+ *                         every motion state change (in addition to the M=
+ *                         field in the periodic D= packet)
+ *    S=CAL|CLEAR|DETECTING|OCCUPIED   state (also sent on every change)
  *    B=<bx,by,bz>         baseline (every 2 s while streaming)
  *    R=<x,y,z>            raw values (every 200 ms while RAW enabled)
  *    A=<on,off,ont,offt,alpha>   current parameters (answer to SHOW / on connect)
@@ -83,6 +95,15 @@
 #define I2C_SCL 9
 #define LED_PIN 4        // status LED on GPIO4: HIGH = DETECTING / OCCUPIED (-1 to disable)
 
+// ---- motion detection input (digital output of the motion module) ---------
+// The module's output may be active-HIGH or active-LOW; change
+// MOTION_ACTIVE_LEVEL to LOW if your module reports motion with a LOW level.
+// Use INPUT_PULLUP in MOTION_INPUT_MODE if the module has an open-collector
+// output (needs the internal pull-up resistor).
+#define MOTION_PIN            5      // GPIO5 (-1 to disable motion reading)
+#define MOTION_ACTIVE_LEVEL   HIGH   // logic level that means "motion active"
+#define MOTION_INPUT_MODE     INPUT  // INPUT or INPUT_PULLUP
+
 #define DEVICE_NAME "CAR-SENSOR"          // app filters names starting with "CAR-"
 
 static const char* SVC_UUID   = "0000ffe0-0000-1000-8000-00805f9b34fb";
@@ -113,6 +134,10 @@ static uint32_t connectAt = 0;
 static int32_t rawX = 0, rawY = 0, rawZ = 0;
 static float   baseX = 0.0f, baseY = 0.0f, baseZ = 0.0f;
 static int32_t delta = 0;
+
+#if MOTION_PIN >= 0
+static bool motionActive = false;   // last reported motion input level
+#endif
 
 static bool streamOn    = false;
 static bool rawStreamOn = false;
@@ -589,6 +614,10 @@ void setup() {
   digitalWrite(LED_PIN, LOW);
 #endif
 
+#if MOTION_PIN >= 0
+  pinMode(MOTION_PIN, MOTION_INPUT_MODE);
+#endif
+
   Wire.begin(I2C_SDA, I2C_SCL);
   Wire.setClock(100000);
   Wire.setTimeOut(50);                        // 50 ms bus timeout — never block the loop
@@ -597,7 +626,7 @@ void setup() {
   loadParams();
 
   Serial.println();
-  Serial.println("=== Metal Sensor v1.1 — I2C auto-detect (0x2C/0x1C/0x0D/0x1E) ===");
+  Serial.println("=== Metal Sensor v1.2 — I2C auto-detect + motion input (GPIO5) ===");
 
 #if SENSOR_TYPE == SENSOR_TYPE_QMC
   sensorLost = !sensorDetect();
@@ -639,6 +668,18 @@ void loop() {
   // ---- sensor read @ ~50 Hz ----
   if (now - lastSensorTick >= 20) {
     lastSensorTick = now;
+
+#if MOTION_PIN >= 0
+    // ---- motion input (read on every sensor cycle, independent of I2C) ----
+    bool motionNow = (digitalRead(MOTION_PIN) == MOTION_ACTIVE_LEVEL);
+    if (motionNow != motionActive) {
+      motionActive = motionNow;
+      // Standalone edge message so the app is notified immediately; the
+      // periodic D= packet repeats the level anyway in case this is lost.
+      if (deviceConnected) sendLine(String("M=") + (motionActive ? "1" : "0"));
+      Serial.println(motionActive ? "[M] motion START" : "[M] motion END");
+    }
+#endif
 
     int32_t x, y, z;
     bool ok = false;
@@ -748,8 +789,18 @@ void loop() {
   if (deviceConnected && streamOn && (now - lastStreamTick) >= 200) {
     lastStreamTick = now;
     if (rawStreamOn) sendRaw();
-    char buf[24];
-    snprintf(buf, sizeof(buf), "D=%d", (int)delta);
+    // Periodic packet: delta + motion level + state, comma-separated
+    // key=value fields. Repeating M and S every packet lets the app
+    // re-sync even if a standalone edge message was missed.
+    char buf[40];
+    snprintf(buf, sizeof(buf), "D=%d,M=%d,S=%s",
+             (int)delta,
+#if MOTION_PIN >= 0
+             motionActive ? 1 : 0,
+#else
+             0,
+#endif
+             STATE_NAMES[state]);
     sendLine(String(buf));
     if ((now - lastBaseTick) >= 2000) {
       lastBaseTick = now;

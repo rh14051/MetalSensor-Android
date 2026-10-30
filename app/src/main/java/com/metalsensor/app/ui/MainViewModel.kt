@@ -43,7 +43,7 @@ data class ScanDeviceUi(val name: String, val mac: String, val rssi: Int)
 
 data class Triple3(val x: Int = 0, val y: Int = 0, val z: Int = 0)
 
-data class ChartPoint(val t: Long, val v: Float)
+data class ChartPoint(val t: Long, val v: Float, val motion: Boolean = false)
 
 enum class ParamKey { ON, OFF, ONT, OFFT, ALPHA }
 
@@ -113,6 +113,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _rawEnabled = MutableStateFlow(false)
     val rawEnabled: StateFlow<Boolean> = _rawEnabled.asStateFlow()
+
+    // ----- motion detection (M= from the device) -----
+    private val _motion = MutableStateFlow(false)
+    val motion: StateFlow<Boolean> = _motion.asStateFlow()
+
+    /** Motion events in the current session (counts 0 -> 1 edges). */
+    private val _motionCount = MutableStateFlow(0)
+    val motionCount: StateFlow<Int> = _motionCount.asStateFlow()
+
+    /** Whether the orange motion bands are drawn over the chart. */
+    private val _showMotionOnChart = MutableStateFlow(prefs.showMotionChart)
+    val showMotionOnChart: StateFlow<Boolean> = _showMotionOnChart.asStateFlow()
 
     private val _chartPoints = MutableStateFlow<List<ChartPoint>>(emptyList())
     val chartPoints: StateFlow<List<ChartPoint>> = _chartPoints.asStateFlow()
@@ -238,6 +250,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         when (val msg = Protocol.parse(line)) {
             is InboundMessage.Delta -> {
                 _delta.value = msg.value
+                // Extended stream packet fields keep the app in sync even when
+                // a standalone edge message was missed.
+                if (msg.motion != null) setMotion(msg.motion)
+                if (msg.state != null) _sensorState.value = msg.state
                 appendChart(msg.value)
                 if (_recording.value) {
                     csvQueue.trySend(
@@ -245,6 +261,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
             }
+
+            is InboundMessage.Motion -> setMotion(msg.active)
 
             is InboundMessage.State -> _sensorState.value = msg.state
 
@@ -332,11 +350,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         for (p in current) {
             if (p.t >= now - CHART_WINDOW_MS) next.add(p)
         }
-        next.add(ChartPoint(now, value.toFloat()))
+        next.add(ChartPoint(now, value.toFloat(), _motion.value))
         if (next.size > CHART_MAX_POINTS) {
             next.subList(0, next.size - CHART_MAX_POINTS).clear()
         }
         _chartPoints.value = next
+    }
+
+    /**
+     * Applies a motion state coming from either a standalone M= edge event or
+     * the M= field of the periodic stream packet. Counts a session event on
+     * every 0 -> 1 transition.
+     */
+    private fun setMotion(active: Boolean) {
+        val prev = _motion.value
+        if (prev == active) return
+        _motion.value = active
+        if (active) _motionCount.value += 1
+    }
+
+    fun resetMotionCount() {
+        _motionCount.value = 0
+    }
+
+    fun setShowMotionOnChart(enabled: Boolean) {
+        _showMotionOnChart.value = enabled
+        prefs.showMotionChart = enabled
     }
 
     // -----------------------------------------------------------------------

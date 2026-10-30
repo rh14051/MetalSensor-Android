@@ -27,9 +27,15 @@ class PrefsRepository(context: Context) {
         prefs.edit().putString(key, value).apply()
     }
 
+    /** Whether the chart draws the orange motion bands (default: on). */
+    var showMotionChart: Boolean
+        get() = prefs.getBoolean(KEY_SHOW_MOTION_CHART, true)
+        set(value) = prefs.edit().putBoolean(KEY_SHOW_MOTION_CHART, value).apply()
+
     companion object {
         private const val KEY_MAC = "device_mac"
         private const val KEY_NAME = "device_name"
+        private const val KEY_SHOW_MOTION_CHART = "show_motion_chart"
 
         const val PARAM_THRESHOLD_ON = "param_threshold_on"
         const val PARAM_THRESHOLD_OFF = "param_threshold_off"

@@ -180,7 +180,7 @@ fun ConnectionScreen(vm: MainViewModel) {
         if (results.isEmpty() && !scanning) {
             Card(Modifier.fillMaxWidth()) {
                 Text(
-                    "هنوز دستگاهی پیدا نشده است.\nدکمه «اسکن دستگاه‌ها» را بزنید و مطمئن شوید ESP32 روشن و در دسترس است.",
+                    "هنوز دستگاهی پیدا نشده است.\nدکمه «اسکن دستگاه‌ها» را بزنید و مطمئن شوید کنترلر روشن و در دسترس است.",
                     modifier = Modifier.padding(12.dp),
                     style = MaterialTheme.typography.bodyMedium,
                 )
